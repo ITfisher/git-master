@@ -1,0 +1,87 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model Requirement {
+  id                Int      @id @default(autoincrement())
+  requirementNumber String   @unique
+  title             String
+  description       String?
+  jiraUrl           String?  // JIRA链接字段
+  jiraKey           String?  // 从jiraUrl解析出的JIRA编号
+  status            RequirementStatus @default(BACKLOG)
+  priority          Priority @default(MEDIUM)
+  startTime         DateTime? // 开发开始时间 (开发者填写，可为空)
+  endTime           DateTime? // 开发结束时间 (开发者填写，可为空)
+  createdAt         DateTime @default(now())  // 创建时间
+  updatedAt         DateTime @updatedAt       // 更新时间
+  
+  branches          RequirementBranch[]
+  
+  @@map("requirements")
+}
+
+model Project {
+  id            String      @id @default(cuid())
+  name          String
+  description   String?
+  gitRepository String?
+  masterBranch  String      @default("main")
+  qaBranch      String      @default("test")
+  status        ProjectStatus @default(ACTIVE)
+  createdAt     DateTime    @default(now())  // 创建时间
+  updatedAt     DateTime    @updatedAt       // 更新时间
+  
+  branches      RequirementBranch[]
+  
+  @@map("projects")
+}
+
+model RequirementBranch {
+  id            String      @id @default(cuid())
+  requirementId Int
+  projectId     String
+  branchName    String      // 优先使用jiraKey，否则使用requirementNumber (都保持原始大小写)
+  status        BranchStatus @default(PENDING)
+  createdAt     DateTime    @default(now())  // 创建时间
+  updatedAt     DateTime    @updatedAt       // 更新时间
+  
+  requirement   Requirement @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+  project       Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  @@map("requirement_branches")
+}
+
+enum RequirementStatus {
+  BACKLOG
+  DEVELOPMENT
+  TESTING
+  READY
+  RELEASED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum ProjectStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum BranchStatus {
+  PENDING
+  DEVELOPMENT
+  TESTING
+  READY
+  RELEASED
+}

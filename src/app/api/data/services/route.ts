@@ -4,27 +4,10 @@ import { prisma } from '@/lib/prisma';
 export async function GET() {
   try {
     const projects = await prisma.project.findMany({
-      include: {
-        branches: {
-          include: {
-            requirement: {
-              select: {
-                id: true,
-                requirementNumber: true,
-                title: true
-              }
-            }
-          },
-          orderBy: {
-            createdAt: 'desc'
-          }
-        }
-      },
       orderBy: {
         createdAt: 'desc'
       }
     });
-    
     return NextResponse.json(projects);
   } catch (error) {
     console.error('Error loading projects:', error);
@@ -71,24 +54,12 @@ export async function POST(request: NextRequest) {
           qaBranch: projectData.qaBranch || 'test',
           status: projectData.status || 'ACTIVE'
         },
-        include: {
-          branches: {
-            include: {
-              requirement: {
-                select: {
-                  id: true,
-                  requirementNumber: true,
-                  title: true
-                }
-              }
-            }
-          }
-        }
       });
       return NextResponse.json({ success: true, project });
     }
   } catch (error) {
     console.error('Error saving projects:', error);
-    return NextResponse.json({ success: false, error: 'Failed to save projects' }, { status: 500 });
+    console.error('Project data received:', projectData);
+    return NextResponse.json({ success: false, error: 'Failed to save projects', details: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
 }

@@ -43,3 +43,5 @@ next-env.d.ts
 # local data storage (git-manager)
 /data/
 *.data.json
+
+/src/generated/prisma

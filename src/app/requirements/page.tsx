@@ -1,10 +1,13 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import AppLayout from '@/components/AppLayout';
 import { DataStorage, ProjectTemplate, RequirementBranch, Requirement } from '@/utils/dataStorage';
+import { BranchOperations } from '@/utils/branchOperations';
 
 export default function RequirementsPage() {
+  const router = useRouter();
   const [projects, setProjects] = useState<ProjectTemplate[]>([]);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
@@ -30,12 +33,12 @@ export default function RequirementsPage() {
   
   // 拖拽状态
   const [draggedRequirement, setDraggedRequirement] = useState<Requirement | null>(null);
+  const [updatingRequirements, setUpdatingRequirements] = useState<Set<number>>(new Set());
 
   // 数据加载
   useEffect(() => {
     const loadData = async () => {
       try {
-        await DataStorage.migrateFromLocalStorage();
         const loadedProjects = await DataStorage.loadProjects();
         const loadedRequirements = await DataStorage.loadRequirements();
         
@@ -53,18 +56,14 @@ export default function RequirementsPage() {
     }
   }, [isDataLoaded]);
 
-  // 数据保存
+  // 数据保存 - 只保存项目数据的自动同步
   useEffect(() => {
     if (isDataLoaded) {
       DataStorage.saveProjects(projects);
     }
   }, [projects, isDataLoaded]);
   
-  useEffect(() => {
-    if (isDataLoaded) {
-      DataStorage.saveRequirements(requirements);
-    }
-  }, [requirements, isDataLoaded]);
+  // 移除了需求的自动保存，现在通过具体的操作API来更新数据
 
   // 从JIRA URL中提取需求号
   const extractJiraKey = (url: string): string => {
@@ -87,110 +86,173 @@ export default function RequirementsPage() {
     return '';
   };
 
+  // 生成下一个ID（模拟数据库自增）
+  const generateNextId = (): number => {
+    if (requirements.length === 0) {
+      return 1;
+    }
+    // 找到最大的ID
+    const maxId = Math.max(...requirements.map(req => req.id));
+    return maxId + 1;
+  };
+
+  // 根据ID生成需求编号
+  const generateRequirementNumber = (id: number): string => {
+    return `BN-${id}`;
+  };
+
   // 需求管理功能
-  const addRequirement = () => {
+  const addRequirement = async () => {
     if (!newReqTitle.trim()) return;
     
     const jiraKey = extractJiraKey(newReqJiraUrl);
+    const newId = generateNextId();
+    const requirementNumber = generateRequirementNumber(newId);
     
-    const newReq: Requirement = {
-      id: Date.now().toString(),
+    const newReqData = {
+      requirementNumber: requirementNumber,
       title: newReqTitle,
       description: newReqDescription,
       jiraUrl: newReqJiraUrl,
       jiraKey: jiraKey,
       branches: [],
-      status: 'backlog'
+      status: 'BACKLOG' as const,
+      priority: 'MEDIUM' as const,
+      startTime: undefined,
+      endTime: undefined
     };
     
-    setRequirements([...requirements, newReq]);
-    closeNewRequirement();
+    try {
+      const result = await DataStorage.createRequirement(newReqData);
+      
+      if (result.success && result.requirement) {
+        // 使用服务器返回的需求数据更新本地状态
+        setRequirements([...requirements, result.requirement]);
+        closeNewRequirement();
+      } else {
+        console.error('Failed to create requirement:', result.error);
+        alert('创建需求失败: ' + (result.error || '未知错误'));
+      }
+    } catch (error) {
+      console.error('Error creating requirement:', error);
+      alert('创建需求失败: 网络错误');
+    }
   };
 
-  const deleteRequirement = (reqId: string) => {
-    setRequirements(requirements.filter(r => r.id !== reqId));
+  const deleteRequirement = async (reqId: number) => {
+    if (!confirm('确定要删除这个需求吗？此操作不可撤销。')) {
+      return;
+    }
+
+    try {
+      const result = await DataStorage.deleteRequirement(reqId);
+      
+      if (result.success) {
+        // 更新本地状态，移除已删除的需求
+        setRequirements(requirements.filter(r => r.id !== reqId));
+        
+        // 如果弹窗中显示的是被删除的需求，关闭弹窗
+        if (detailRequirement && detailRequirement.id === reqId) {
+          closeRequirementDetail();
+        }
+      } else {
+        console.error('Failed to delete requirement:', result.error);
+        alert('删除需求失败: ' + (result.error || '未知错误'));
+      }
+    } catch (error) {
+      console.error('Error deleting requirement:', error);
+      alert('删除需求失败: 网络错误');
+    }
   };
 
   // 为需求添加新分支
-  const addBranchToRequirement = (reqId: string, projectId: string) => {
+  const addBranchToRequirement = async (reqId: number, projectId: string) => {
     const requirement = requirements.find(r => r.id === reqId);
     const project = projects.find(p => p.id === projectId);
     
     if (!requirement || !project) return;
 
-    const jiraKey = requirement.jiraKey;
-    let branchName = '';
-    
-    if (jiraKey) {
-      branchName = `feature/${jiraKey.toLowerCase()}`;
-    } else {
-      branchName = `feature/${requirement.title.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}`;
-    }
-
-    const newBranch: RequirementBranch = {
-      id: Date.now().toString(),
-      projectId: projectId,
-      branchName: branchName,
-      status: 'pending'
-    };
-
-    const updatedRequirements = requirements.map(req => 
-      req.id === reqId ? {
-        ...req,
-        branches: [...req.branches, newBranch]
-      } : req
-    );
-
-    setRequirements(updatedRequirements);
-    
-    // 同步更新弹窗中的需求详情
-    if (detailRequirement && detailRequirement.id === reqId) {
-      setDetailRequirement({
-        ...detailRequirement,
-        branches: [...detailRequirement.branches, newBranch]
-      });
+    try {
+      const result = await BranchOperations.addBranchToRequirement(requirement, projectId);
+      
+      if (result.success && result.branch) {
+        // 更新需求列表中的分支
+        const updatedRequirements = requirements.map(req => 
+          req.id === reqId ? {
+            ...req,
+            branches: [...req.branches, result.branch!]
+          } : req
+        );
+        setRequirements(updatedRequirements);
+        
+        // 同步更新弹窗中的需求详情
+        if (detailRequirement && detailRequirement.id === reqId) {
+          setDetailRequirement({
+            ...detailRequirement,
+            branches: [...(detailRequirement.branches || []), result.branch]
+          });
+        }
+      } else {
+        console.error('Failed to add branch:', result.error);
+        alert('添加分支失败: ' + (result.error || '未知错误'));
+      }
+    } catch (error) {
+      console.error('Error adding branch:', error);
+      alert('添加分支失败: 网络错误');
     }
   };
 
   // 删除需求分支
-  const deleteBranch = (reqId: string, branchId: string) => {
-    const updatedRequirements = requirements.map(req => 
-      req.id === reqId ? {
-        ...req,
-        branches: req.branches.filter(branch => branch.id !== branchId)
-      } : req
-    );
-
-    setRequirements(updatedRequirements);
-    
-    // 同步更新弹窗中的需求详情
-    if (detailRequirement && detailRequirement.id === reqId) {
-      setDetailRequirement({
-        ...detailRequirement,
-        branches: detailRequirement.branches.filter(branch => branch.id !== branchId)
-      });
+  const deleteBranch = async (reqId: number, branchId: string) => {
+    try {
+      const result = await BranchOperations.deleteRequirementBranch(branchId);
+      
+      if (result.success) {
+        // 更新需求列表中的分支
+        const updatedRequirements = requirements.map(req => 
+          req.id === reqId ? {
+            ...req,
+            branches: req.branches.filter(branch => branch.id !== branchId)
+          } : req
+        );
+        setRequirements(updatedRequirements);
+        
+        // 同步更新弹窗中的需求详情
+        if (detailRequirement && detailRequirement.id === reqId) {
+          setDetailRequirement({
+            ...detailRequirement,
+            branches: (detailRequirement.branches || []).filter(branch => branch.id !== branchId)
+          });
+        }
+      } else {
+        console.error('Failed to delete branch:', result.error);
+        alert('删除分支失败: ' + (result.error || '未知错误'));
+      }
+    } catch (error) {
+      console.error('Error deleting branch:', error);
+      alert('删除分支失败: 网络错误');
     }
   };
 
   // 看板相关函数
   const getColumnTitle = (status: Requirement['status']): string => {
     switch (status) {
-      case 'backlog': return '待处理';
-      case 'development': return '开发中';
-      case 'testing': return '测试中';
-      case 'ready': return '待发布';
-      case 'released': return '已发布';
+      case 'BACKLOG': return '待处理';
+      case 'DEVELOPMENT': return '开发中';
+      case 'TESTING': return '测试中';
+      case 'READY': return '待发布';
+      case 'RELEASED': return '已发布';
       default: return '未知状态';
     }
   };
 
   const getColumnColor = (status: Requirement['status']): string => {
     switch (status) {
-      case 'backlog': return 'bg-gray-100 dark:bg-gray-700';
-      case 'development': return 'bg-blue-100 dark:bg-blue-900/20';
-      case 'testing': return 'bg-yellow-100 dark:bg-yellow-900/20';
-      case 'ready': return 'bg-green-100 dark:bg-green-900/20';
-      case 'released': return 'bg-purple-100 dark:bg-purple-900/20';
+      case 'BACKLOG': return 'bg-gray-100 dark:bg-gray-700';
+      case 'DEVELOPMENT': return 'bg-blue-100 dark:bg-blue-900/20';
+      case 'TESTING': return 'bg-yellow-100 dark:bg-yellow-900/20';
+      case 'READY': return 'bg-green-100 dark:bg-green-900/20';
+      case 'RELEASED': return 'bg-purple-100 dark:bg-purple-900/20';
       default: return 'bg-gray-100';
     }
   };
@@ -210,15 +272,84 @@ export default function RequirementsPage() {
     e.dataTransfer.dropEffect = 'move';
   };
 
-  const handleDrop = (e: React.DragEvent, newStatus: Requirement['status']) => {
+  const handleDrop = async (e: React.DragEvent, newStatus: Requirement['status']) => {
     e.preventDefault();
     
     if (draggedRequirement && draggedRequirement.status !== newStatus) {
+      const originalStatus = draggedRequirement.status;
+      const updatedRequirement = { ...draggedRequirement, status: newStatus };
+      
+      // 添加到正在更新的集合
+      setUpdatingRequirements(prev => new Set(prev).add(draggedRequirement.id));
+      
+      // 乐观更新：立即更新UI以提供即时反馈
       setRequirements(requirements.map(req => 
         req.id === draggedRequirement.id 
-          ? { ...req, status: newStatus }
+          ? updatedRequirement
           : req
       ));
+      
+      // 如果弹窗中显示的是当前拖拽的需求，也要更新
+      if (detailRequirement && detailRequirement.id === draggedRequirement.id) {
+        setDetailRequirement(updatedRequirement);
+      }
+      
+      // 异步调用API更新服务器
+      try {
+        const result = await DataStorage.updateRequirement(updatedRequirement);
+        
+        if (result.success && result.requirement) {
+          // 使用服务器返回的最新数据更新本地状态
+          setRequirements(requirements.map(req => 
+            req.id === draggedRequirement.id 
+              ? result.requirement!
+              : req
+          ));
+          
+          if (detailRequirement && detailRequirement.id === draggedRequirement.id) {
+            setDetailRequirement(result.requirement);
+          }
+        } else {
+          console.error('Failed to update requirement status:', result.error);
+          
+          // API失败时回滚到原始状态
+          const revertedRequirement = { ...updatedRequirement, status: originalStatus };
+          setRequirements(requirements.map(req => 
+            req.id === draggedRequirement.id 
+              ? revertedRequirement
+              : req
+          ));
+          
+          if (detailRequirement && detailRequirement.id === draggedRequirement.id) {
+            setDetailRequirement(revertedRequirement);
+          }
+          
+          alert('状态更新失败: ' + (result.error || '未知错误'));
+        }
+      } catch (error) {
+        console.error('Error updating requirement status:', error);
+        
+        // 网络错误时回滚到原始状态
+        const revertedRequirement = { ...updatedRequirement, status: originalStatus };
+        setRequirements(requirements.map(req => 
+          req.id === draggedRequirement.id 
+            ? revertedRequirement
+            : req
+        ));
+        
+        if (detailRequirement && detailRequirement.id === draggedRequirement.id) {
+          setDetailRequirement(revertedRequirement);
+        }
+        
+        alert('状态更新失败: 网络错误');
+      } finally {
+        // 移除更新状态
+        setUpdatingRequirements(prev => {
+          const next = new Set(prev);
+          next.delete(draggedRequirement.id);
+          return next;
+        });
+      }
     }
     
     setDraggedRequirement(null);
@@ -232,8 +363,8 @@ export default function RequirementsPage() {
   const openRequirementDetail = (req: Requirement) => {
     setDetailRequirement(req);
     setEditTitle(req.title);
-    setEditDescription(req.description);
-    setEditJiraUrl(req.jiraUrl);
+    setEditDescription(req.description || '');
+    setEditJiraUrl(req.jiraUrl || '');
     setHasUnsavedChanges(false);
     setShowRequirementDetail(true);
   };
@@ -277,7 +408,7 @@ export default function RequirementsPage() {
     setHasUnsavedChanges(hasChanges);
   };
 
-  const saveRequirementChanges = () => {
+  const saveRequirementChanges = async () => {
     if (!detailRequirement) return;
     
     const jiraKey = extractJiraKey(editJiraUrl);
@@ -290,19 +421,33 @@ export default function RequirementsPage() {
       jiraKey: jiraKey
     };
     
-    setRequirements(requirements.map(req => 
-      req.id === detailRequirement.id ? updatedRequirement : req
-    ));
-    
-    setDetailRequirement(updatedRequirement);
-    setHasUnsavedChanges(false);
+    try {
+      const result = await DataStorage.updateRequirement(updatedRequirement);
+      
+      if (result.success && result.requirement) {
+        // Update local state with the server response
+        setRequirements(requirements.map(req => 
+          req.id === detailRequirement.id ? result.requirement! : req
+        ));
+        
+        setDetailRequirement(result.requirement);
+        setHasUnsavedChanges(false);
+      } else {
+        console.error('Failed to update requirement:', result.error);
+        // Could show error message to user here
+        alert('保存失败: ' + (result.error || '未知错误'));
+      }
+    } catch (error) {
+      console.error('Error saving requirement changes:', error);
+      alert('保存失败: 网络错误');
+    }
   };
 
   const cancelRequirementChanges = () => {
     if (detailRequirement) {
       setEditTitle(detailRequirement.title);
-      setEditDescription(detailRequirement.description);
-      setEditJiraUrl(detailRequirement.jiraUrl);
+      setEditDescription(detailRequirement.description || '');
+      setEditJiraUrl(detailRequirement.jiraUrl || '');
       setHasUnsavedChanges(false);
     }
   };
@@ -454,7 +599,7 @@ export default function RequirementsPage() {
 
           {/* 看板视图 */}
           <div className="flex-1 flex gap-4 overflow-x-auto">
-            {(['backlog', 'development', 'testing', 'ready', 'released'] as const).map((status) => (
+            {(['BACKLOG', 'DEVELOPMENT', 'TESTING', 'READY', 'RELEASED'] as const).map((status) => (
               <div 
                 key={status}
                 className={`flex-shrink-0 w-64 ${getColumnColor(status)} rounded-lg p-4`}
@@ -477,34 +622,46 @@ export default function RequirementsPage() {
                       draggable
                       onDragStart={(e) => handleDragStart(e, req)}
                       onDragEnd={handleDragEnd}
-                      className={`bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm cursor-move hover:shadow-md transition-shadow border-l-4 ${
+                      onClick={() => openRequirementDetail(req)}
+                      className={`bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm cursor-pointer hover:shadow-md transition-shadow border-l-4 ${
                         req.jiraKey ? 'border-l-purple-500' : 'border-l-gray-300'
-                      } ${draggedRequirement?.id === req.id ? 'opacity-50' : ''}`}
+                      } ${draggedRequirement?.id === req.id ? 'opacity-50' : ''} ${
+                        updatingRequirements.has(req.id) ? 'ring-2 ring-blue-500 ring-opacity-50' : ''
+                      }`}
                     >
                       {/* 需求卡片头部 */}
                       <div className="flex items-start justify-between mb-2">
-                        <button 
-                          onClick={() => openRequirementDetail(req)}
-                          className="font-medium text-gray-900 dark:text-white hover:text-blue-600 dark:hover:text-blue-400 text-left flex-1"
-                        >
+                        <div className="font-medium text-gray-900 dark:text-white flex-1 flex items-center gap-2">
                           {req.title}
-                        </button>
+                          {updatingRequirements.has(req.id) && (
+                            <div className="animate-spin h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full"></div>
+                          )}
+                        </div>
                         <button
-                          onClick={() => deleteRequirement(req.id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteRequirement(req.id);
+                          }}
                           className="text-gray-400 hover:text-red-500 ml-2"
                         >
                           ×
                         </button>
                       </div>
                       
-                      {/* JIRA标签 */}
-                      {req.jiraKey && (
-                        <div className="mb-2">
+                      {/* 需求编号和JIRA标签 */}
+                      <div className="mb-2 flex items-center gap-2 flex-wrap">
+                        {/* 系统需求编号 */}
+                        <span className="px-2 py-1 bg-blue-500 text-white text-xs rounded">
+                          {req.requirementNumber}
+                        </span>
+                        
+                        {/* JIRA标签 */}
+                        {req.jiraKey && (
                           <span className="px-2 py-1 bg-purple-500 text-white text-xs rounded">
                             {req.jiraKey}
                           </span>
-                        </div>
-                      )}
+                        )}
+                      </div>
                       
                       {/* 需求描述 */}
                       {req.description && (
@@ -512,73 +669,6 @@ export default function RequirementsPage() {
                           {req.description}
                         </p>
                       )}
-                      
-                      {/* 分支信息 */}
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs text-gray-500 dark:text-gray-400">
-                            关联分支 ({req.branches.length})
-                          </span>
-                          <select
-                            className="text-xs px-2 py-1 border border-gray-300 dark:border-gray-600 rounded dark:bg-gray-700 dark:text-white"
-                            onChange={(e) => {
-                              if (e.target.value) {
-                                addBranchToRequirement(req.id, e.target.value);
-                                e.target.value = '';
-                              }
-                            }}
-                          >
-                            <option value="">+分支</option>
-                            {projects
-                              .filter(p => !req.branches.some(b => b.projectId === p.id))
-                              .map(project => (
-                                <option key={project.id} value={project.id}>
-                                  {project.name}
-                                </option>
-                              ))
-                            }
-                          </select>
-                        </div>
-                        
-                        {req.branches.map((branch) => {
-                          const project = projects.find(p => p.id === branch.projectId);
-                          return (
-                            <div key={branch.id} className="flex items-center justify-between bg-gray-50 dark:bg-gray-700 rounded p-2">
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-1">
-                                  <span className="text-xs font-medium text-gray-900 dark:text-white truncate">
-                                    {project?.name || '未知项目'}
-                                  </span>
-                                  <span className={`px-1 py-0.5 rounded text-xs text-white ${getBranchStatusColor(branch.status)}`}>
-                                    {getBranchStatusText(branch.status)}
-                                  </span>
-                                </div>
-                                <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                                  {branch.branchName}
-                                </p>
-                              </div>
-                              <div className="flex gap-1 ml-2">
-                                <button
-                                  onClick={() => {
-                                    if (project) {
-                                      openGitOperations(branch, project);
-                                    }
-                                  }}
-                                  className="px-1 py-0.5 bg-green-600 hover:bg-green-700 text-white rounded text-xs"
-                                >
-                                  Git
-                                </button>
-                                <button
-                                  onClick={() => deleteBranch(req.id, branch.id)}
-                                  className="px-1 py-0.5 bg-red-600 hover:bg-red-700 text-white rounded text-xs"
-                                >
-                                  ×
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
                     </div>
                   ))}
                 </div>
@@ -590,12 +680,30 @@ export default function RequirementsPage() {
 
       {/* 需求详情弹窗 */}
       {showRequirementDetail && detailRequirement && (
-        <div className="fixed inset-0 bg-black/20 backdrop-blur-md flex items-center justify-center z-50 p-4">
-          <div className="bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm rounded-lg shadow-xl border border-white/20 dark:border-gray-700/50 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+        <div 
+          className="fixed inset-0 bg-black/20 backdrop-blur-md flex items-center justify-center z-50 p-4"
+          onClick={closeRequirementDetail}
+        >
+          <div 
+            className="bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm rounded-lg shadow-xl border border-white/20 dark:border-gray-700/50 max-w-4xl w-full max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="p-6">
               <div className="flex items-center justify-between mb-6">
                 <h2 className="text-2xl font-bold text-gray-900 dark:text-white">需求详情</h2>
                 <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => {
+                      router.push(`/requirements/${detailRequirement.requirementNumber}`);
+                    }}
+                    className="flex items-center gap-2 text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                    title="跳转到详情页面"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                    </svg>
+                  </button>
                   {hasUnsavedChanges && (
                     <>
                       <button
@@ -618,14 +726,6 @@ export default function RequirementsPage() {
                       </button>
                     </>
                   )}
-                  <button
-                    onClick={closeRequirementDetail}
-                    className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                  >
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
                 </div>
               </div>
               
@@ -635,6 +735,17 @@ export default function RequirementsPage() {
                   <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">基本信息</h3>
                   
                   <div className="space-y-4">
+                    {/* 需求编号 - 只读显示 */}
+                    <div>
+                      <label className="block font-medium text-gray-700 dark:text-gray-300 mb-2">需求编号：</label>
+                      <div className="flex items-center gap-2">
+                        <span className="px-3 py-2 bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-200 rounded-md font-medium">
+                          {detailRequirement.requirementNumber}
+                        </span>
+                        <span className="text-sm text-gray-500 dark:text-gray-400">系统自动生成</span>
+                      </div>
+                    </div>
+                    
                     <div>
                       <label className="block font-medium text-gray-700 dark:text-gray-300 mb-2">需求标题：</label>
                       <input
@@ -694,7 +805,7 @@ export default function RequirementsPage() {
                 <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                      关联分支 ({detailRequirement.branches.length})
+                      关联分支 ({detailRequirement.branches?.length || 0})
                     </h3>
                     <select
                       className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-600 dark:text-white"
@@ -707,7 +818,7 @@ export default function RequirementsPage() {
                     >
                       <option value="">+ 绑定项目分支</option>
                       {projects
-                        .filter(p => !detailRequirement.branches.some(b => b.projectId === p.id))
+                        .filter(p => !detailRequirement.branches?.some(b => b.projectId === p.id))
                         .map(project => (
                           <option key={project.id} value={project.id}>
                             {project.name}
@@ -717,11 +828,11 @@ export default function RequirementsPage() {
                     </select>
                   </div>
                   
-                  {detailRequirement.branches.length === 0 ? (
+                  {(detailRequirement.branches?.length || 0) === 0 ? (
                     <p className="text-gray-500 dark:text-gray-400 italic">暂未绑定任何项目分支</p>
                   ) : (
                     <div className="space-y-3">
-                      {detailRequirement.branches.map((branch) => {
+                      {detailRequirement.branches?.map((branch) => {
                         const project = projects.find(p => p.id === branch.projectId);
                         return (
                           <div key={branch.id} className="bg-white dark:bg-gray-800 rounded-lg p-4 border">
@@ -773,19 +884,17 @@ export default function RequirementsPage() {
 
       {/* Git操作弹窗 */}
       {showGitOperations && operationBranch && operationProject && (
-        <div className="fixed inset-0 bg-black/20 backdrop-blur-md flex items-center justify-center z-50 p-4">
-          <div className="bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm rounded-lg shadow-xl border border-white/20 dark:border-gray-700/50 max-w-5xl w-full max-h-[90vh] overflow-y-auto">
+        <div 
+          className="fixed inset-0 bg-black/20 backdrop-blur-md flex items-center justify-center z-50 p-4"
+          onClick={closeGitOperations}
+        >
+          <div 
+            className="bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm rounded-lg shadow-xl border border-white/20 dark:border-gray-700/50 max-w-5xl w-full max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="p-6">
-              <div className="flex items-center justify-between mb-6">
+              <div className="mb-6">
                 <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Git操作</h2>
-                <button
-                  onClick={closeGitOperations}
-                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
               </div>
               
               <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4 mb-6">
@@ -827,19 +936,17 @@ export default function RequirementsPage() {
 
       {/* 新建需求弹窗 */}
       {showNewRequirement && (
-        <div className="fixed inset-0 bg-black/20 backdrop-blur-md flex items-center justify-center z-50 p-4">
-          <div className="bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm rounded-lg shadow-xl border border-white/20 dark:border-gray-700/50 max-w-2xl w-full">
+        <div 
+          className="fixed inset-0 bg-black/20 backdrop-blur-md flex items-center justify-center z-50 p-4"
+          onClick={closeNewRequirement}
+        >
+          <div 
+            className="bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm rounded-lg shadow-xl border border-white/20 dark:border-gray-700/50 max-w-2xl w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="p-6">
-              <div className="flex items-center justify-between mb-6">
+              <div className="mb-6">
                 <h2 className="text-2xl font-bold text-gray-900 dark:text-white">新建需求</h2>
-                <button
-                  onClick={closeNewRequirement}
-                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
               </div>
               
               <div className="space-y-4">
