@@ -502,22 +502,22 @@ export default function RequirementsPage() {
 
   const getBranchStatusColor = (status: RequirementBranch['status']) => {
     switch (status) {
-      case 'pending': return 'bg-gray-500';
-      case 'development': return 'bg-blue-500';
-      case 'testing': return 'bg-yellow-500';
-      case 'ready': return 'bg-green-500';
-      case 'released': return 'bg-purple-500';
+      case 'PENDING': return 'bg-gray-500';
+      case 'DEVELOPMENT': return 'bg-blue-500';
+      case 'TESTING': return 'bg-yellow-500';
+      case 'READY': return 'bg-green-500';
+      case 'RELEASED': return 'bg-purple-500';
       default: return 'bg-gray-500';
     }
   };
 
   const getBranchStatusText = (status: RequirementBranch['status']) => {
     switch (status) {
-      case 'pending': return '待开发';
-      case 'development': return '开发中';
-      case 'testing': return '测试中';
-      case 'ready': return '待发布';
-      case 'released': return '已发布';
+      case 'PENDING': return '待开发';
+      case 'DEVELOPMENT': return '开发中';
+      case 'TESTING': return '测试中';
+      case 'READY': return '待发布';
+      case 'RELEASED': return '已发布';
       default: return '未知';
     }
   };

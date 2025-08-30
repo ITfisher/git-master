@@ -245,22 +245,22 @@ export default function RequirementDetailPage() {
 
   const getBranchStatusColor = (status: RequirementBranch['status']) => {
     switch (status) {
-      case 'pending': return 'bg-gray-500';
-      case 'development': return 'bg-blue-500';
-      case 'testing': return 'bg-yellow-500';
-      case 'ready': return 'bg-green-500';
-      case 'released': return 'bg-purple-500';
+      case 'PENDING': return 'bg-gray-500';
+      case 'DEVELOPMENT': return 'bg-blue-500';
+      case 'TESTING': return 'bg-yellow-500';
+      case 'READY': return 'bg-green-500';
+      case 'RELEASED': return 'bg-purple-500';
       default: return 'bg-gray-500';
     }
   };
 
   const getBranchStatusText = (status: RequirementBranch['status']) => {
     switch (status) {
-      case 'pending': return '待开发';
-      case 'development': return '开发中';
-      case 'testing': return '测试中';
-      case 'ready': return '待发布';
-      case 'released': return '已发布';
+      case 'PENDING': return '待开发';
+      case 'DEVELOPMENT': return '开发中';
+      case 'TESTING': return '测试中';
+      case 'READY': return '待发布';
+      case 'RELEASED': return '已发布';
       default: return '未知';
     }
   };
@@ -338,13 +338,7 @@ export default function RequirementDetailPage() {
       <AppLayout>
         <div className="flex items-center justify-center h-64">
           <div className="text-center">
-            <div className="text-gray-500 dark:text-gray-400 mb-4">需求不存在</div>
-            <button
-              onClick={() => router.push('/requirements')}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg"
-            >
-              返回需求列表
-            </button>
+            <div className="text-gray-500 dark:text-gray-400">需求不存在</div>
           </div>
         </div>
       </AppLayout>
@@ -359,15 +353,6 @@ export default function RequirementDetailPage() {
           <div className="mb-6">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
-                <button
-                  onClick={() => router.push('/requirements')}
-                  className="flex items-center gap-2 text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                  </svg>
-                  返回需求列表
-                </button>
                 <h1 className="text-3xl font-bold text-gray-900 dark:text-white">需求详情</h1>
               </div>
               {hasUnsavedChanges && (
