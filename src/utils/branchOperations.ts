@@ -11,10 +11,10 @@ export class BranchOperations {
     const jiraKey = requirement.jiraKey;
     
     if (jiraKey) {
-      return `feature/${jiraKey.toLowerCase()}`;
+      return `feature/${jiraKey}`;
     } else {
       // 使用系统需求编号作为分支名称
-      return `feature/${requirement.requirementNumber.toLowerCase()}`;
+      return `feature/${requirement.requirementNumber}`;
     }
   }
 
